@@ -1,0 +1,2277 @@
+* Utility functions and procedures for RATS.
+* Copyright © 2021 Giller Investments (New Jersey), LLC
+*
+* This script is licensed for use under the MIT license here: https://mit-license.org
+*
+* THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+* INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+* PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+* LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT
+* OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*
+* This code makes some useful settings for RATS, provides some useful functions and procedures.
+* It is designed to be "sourced" automatically when the RATS workspace is cleared. This can be
+* arranged for by setting the appropriate preferences. Some of this code is technical debt, that
+* I no longer use but have retained here for compatibility with older scripts. Under the MIT
+* license you are free to delete what you don't need. As RATS as evolved, some things I do here
+* are now natively provided by the system.
+*
+* The most useful, and powerful, procedures I use all the time are:
+*   @histogram series
+*   @linregplot xseries yseries
+*   @kolmogorovtest series
+*   @fitgarch11 series
+*
+* They all have many parameters and defaults. I also use the %isvalid(seriesx,seriesy) function a lot in my work.
+*
+* set graphics parameters to useful values
+grparm footer 10
+
+* constants
+compute %goldenratio=(1.+sqrt(5.))/2.
+
+* special footer labels -- you will likely want to change this
+compute %defooter="Data Prepared for and © Giller Investments (New Jersey), LLC, "+%mid(%dateandtime(),7,4)+". Not investment advice."
+
+* fiscal period labels
+function %fiscal d
+    type integer d
+    type string %fiscal
+    compute %fiscal=%string(%year(d))+'Q'+%string(%period(d))
+end function
+
+* akaike
+function %akaike logl nreg nobs
+    type real logl %akaike
+    type integer nreg nobs
+    local real aic
+    compute aic=-2.*logl+2.*nreg,%akaike=aic+2.*nreg*(nreg+1.)/(nobs-nreg-1.)
+end function
+
+* lognormaldensity
+function %loglognormaldensity x m s
+    type real x m s %loglognormaldensity
+    local real mu sigma
+    compute mu=log(m**2/sqrt(m**2+s**2)),sigma=sqrt(log(1.+s**2/m**2)),%loglognormaldensity=0.5*(-log(2.)-log(%pi)-((mu-log(x))/sigma)**2-2.*log(x)-2.*log(sigma))
+end function
+
+function %lognormaldensity x m s
+    type real x m s %lognormaldensity
+    compute %lognormaldensity=exp(%loglognormaldensity(x,m,s))
+end function
+
+* bayesian blends
+function %blend2 x y b
+	type real x y b
+	compute %blend2=%if(%valid(x),%if(%valid(y),b*x+(1.-b)*y,x),y)
+end function
+
+function %squash x y
+	type real %squash x y
+	compute %squash=(1.-exp(-x/y))*y
+end function
+
+* greatest common factor of integers
+function %gcf p q
+
+    type integer %gcf p q
+
+    compute %gcf=fix(%max(p,q))
+
+    while %gcf.gt.1
+    {
+        if %mod(p,%gcf).eq.0.and.%mod(q,%gcf).eq.0
+        {
+            break
+        }
+
+        compute %gcf=%gcf-1
+    }
+end function
+
+* jittered position function
+function desposl av ib aj sz cp
+	type real desposl av ib aj sz cp
+
+	if abs(av).ge.ib*(1.+aj)
+	{
+		compute desposl=sz
+	}
+	else if abs(av).ge.ib*(1.-aj)
+	{
+		compute desposl=0.5*sz*(abs(av)/aj/ib+1.-1./aj)
+	}
+	else
+	{
+		compute desposl=cp
+	}
+end function
+
+* fill forward
+procedure fillforward x b e y
+	type series *x *y
+	type integer b e
+	local integer lb le
+	option real value %na
+	local real ffval
+
+	inquire(series=x) lb<<b le<<e
+	compute ffval=value
+
+	if %defined(y)
+	{
+		set y lb le = ffval=%if(%valid(x),x,ffval),ffval
+	}
+	else
+	{
+		set x lb le = ffval=%if(%valid(x),x,ffval),ffval
+	}
+end procedure
+
+* logistic function that I understand
+function logistic x
+	type real x
+	type real logistic
+	compute logistic=1./(1.+exp(-x))
+end
+
+function logisticp x
+	type real x
+	type real logisticp
+	compute logisticp=logistic(x)*(1.-logistic(x))
+end
+
+function logit x
+    type real x
+    type real logit
+    compute logit=log(x/(1.0-x))
+end function
+
+* format decimal time as h:mm
+function %formathours x
+	type string %formathours
+	type real x
+	local integer h m10 m1
+	compute h=fix(x),m10=fix((x-h)*6),m1=%mod(fix((x-h)*60),10),%formathours=%string(h)+':'+%string(m10)+%string(m1)
+end function
+
+* floor and ceiling
+function %floor x
+    type real x %floor
+    compute %floor=%if(x.ge.0.,float(fix(x)),float(fix(x)-1))
+end
+
+function %ceiling x
+    type real x %ceiling
+    compute %ceiling=%if(x.lt.0.,float(fix(x)),float(fix(x)+1))
+end
+
+function %iszero x y
+   type real x y
+   compute %iszero=%if(x.eq.0.,y,x)
+end function
+
+function %isvalid x y
+   type real x y
+   compute %isvalid=%if(%valid(x),x,y)
+end function
+
+* independent barrier trading system
+function %ibarrier alpha entry exit current
+    type real %ibarrier
+    type real alpha entry exit current
+    compute %ibarrier=%if(abs(alpha).ge.abs(entry),%sign(alpha),%if(current.gt.0..and.alpha.lt.exit.or.current.lt.0..and.alpha.gt.-exit,0.,current))
+end
+
+* win-loss statistic
+procedure winloss series begin end
+    type series series
+    type integer begin
+    type integer end
+    local integer beginl
+    local integer endl
+    option switch print 1
+    option switch twosided 0
+    declare real %winloss
+    local series count
+    option string title %l(series)
+    declare series indexdate rownum colnum matval
+    inquire(series=series) beginl>>begin endl>>end
+    set count beginl endl = %if(%valid(series),%sign(series),0.)
+    accumulate count beginl endl
+    compute %winloss=count(endl)
+    set count beginl endl = %if(%valid(series),abs(%sign(series)),0.)
+    accumulate count
+    compute %winloss=%winloss/sqrt(count(endl))
+
+    if print
+    {
+        display 'Win-Loss Statistic for' title #.##### %winloss
+    }
+
+    if twosided
+    {
+        cdf(print=print) normal %winloss
+    }
+    else
+    {
+        cdf(print=print) chisqr %winloss**2 1
+    }
+end
+
+* make a histogram
+procedure histogram series start end
+
+    type series series
+    type integer start end
+    option integer bins 100
+    option real lower -5.
+    option real upper 5.
+    option string heading ''
+    option string subheading ''
+    option string vlabel 'Frequency'
+    option string hlabel %l(series)
+    option switch entries 1
+    option switch overflows 0
+    option switch underflows 0
+    option switch mean 1
+    option switch stdev 1
+    option switch skewness 0
+    option switch kurtosis 0
+    option switch jbtest 0
+    option switch statistics 0
+    option switch samples 1
+    option switch winloss 0
+    option real spacing 0.05
+    option real max
+    option real min
+    option choice fit 1 none normal error student gamma beta extreme
+    option switch print 1
+    option switch estimates 1
+    option switch parameters 1
+    option switch goodness 1
+    option real threshold 0.
+    option series *frequencies
+    option series *vertices
+    option switch plot 1
+    option switch spgraph    1
+    option real hlog 1.
+    option real vlog 1.
+    option choice labelpos 2 none upleft upright loleft loright above below left right
+    option switch hardcut 0
+    option string footer %defooter
+    option series hgrid
+    option series vgrid
+    option switch aic 0
+    option integer barcol 2
+    option integer linecol 4
+    option real spheight 10
+    option real spwidth 16.18033988749895
+    local series centers counts model likelihood chisq dof
+    local real width ypos dypos logl mu sigma nu observations logl
+    local integer lstart lend nbins nobs
+    local string title addtitle
+    local real vmax
+    local real vmin
+    option series weight
+    option vector[real] initial
+
+    clear centers counts model likelihood chisq dof
+    inquire(series=series) lstart>>start lend>>end
+    compute width=(upper-lower)/float(bins)
+    compute nbins=bins+2
+    set counts 1 nbins = %na
+    set centers 1 nbins = lower+float(t-1)*width+width/2.
+
+    if hardcut.eq.1
+    {
+        density(type=histogram,grid=input,counts,smpl=series.ge.lower.and.series.le.upper,weight=weight) series lstart lend centers counts
+        statistics(noprint,moments,fractiles,smpl=series.ge.lower.and.series.le.upper,weight=weight) series lstart lend
+    }
+    else
+    {
+        density(type=histogram,grid=input,counts,weight=weight) series lstart lend centers counts
+        statistics(noprint,moments,fractiles,weight=weight) series lstart lend
+    }
+
+    compute nobs=%nobs,vmax=%if(%defined(max),max,%na),vmin=%if(%defined(min),min,%na),%maxvalue(counts)*1.025
+
+    if fit.eq.1
+    {
+        if spgraph
+        {
+            spgraph(window=heading,height=spheight,width=spwidth)
+        }
+
+		  if vlog.ne.1.
+		  {
+			    set counts = %iszero(counts,%na)
+		  }
+
+        scatter(hlabel=hlabel,vlabel=vlabel,hmin=lower,hmax=upper,style=barchart,heading=heading,subheading=subheading,hlog=hlog,vlog=vlog,vmax=vmax,vmin=vmin,footer=footer)
+        # centers counts 1 bins barcol
+    }
+    else
+    {
+        if fit.eq.2.or.fit.eq.7
+        {
+            nonlin(parmset=%histogram) mu sigma observations
+        }
+        else
+        {
+            if fit.eq.5.or.fit.eq.6
+            {
+                nonlin(parmset=%histogram) sigma nu observations
+            }
+            else
+            {
+                nonlin(parmset=%histogram) mu sigma nu observations
+            }
+        }
+
+        compute $
+            mu=%if(%defined(initial(1)),initial(1),%isvalid(%if(fit.ne.5.and.fit.ne.6,%mean,threshold),0.)),$
+            sigma=%if(%defined(initial(2)),initial(2),%isvalid(sqrt(%variance),1.)),$
+            nu=%if(%defined(initial(3)),initial(3),1e0),$
+            observations=%if(%defined(initial(4)),initial(4),%isvalid(%nobs,3.)),$
+            logl=%na
+
+        find(method=bfgs,stderrs,print=print,parmset=%histogram,pmethod=simplex,piter=100) maximum logl
+            if sigma.le.0.0.or.observations.lt.0.0.or.nu.le.0.0
+            {
+                compute logl=%na
+            }
+            else
+            {
+                if fit.eq.2 ; set model 1 bins = exp(-0.5*((centers-mu)/sigma)**2)/sqrt(2.*%pi)/sigma
+                if fit.eq.3 ; set model 1 bins = exp(-0.5*abs((centers-mu)/sigma)**(2./nu)-%lngamma(1.+nu/2.))/sigma/2.**(nu/2.+1.)
+                if fit.eq.4 ; set model 1 bins = exp(%lngamma(nu/2.+0.5)-%lngamma(nu/2.))/((1.+((centers-mu)/sigma)**2/nu)**(nu/2.+1.))/sqrt(%pi*nu)
+                if fit.eq.5 ; set model 1 bins = %if(centers.gt.mu,((centers-mu)**(nu-1.))*exp(-(centers-mu)/sigma-%lngamma(nu))/(sigma**nu),0.)
+                if fit.eq.6 ; set model 1 bins = %if(centers.gt.mu,exp(%logbetadensity(centers-mu,sigma,nu)),0.)
+                if fit.eq.7 ; set model 1 bins = exp((mu-centers)/sigma-exp((mu-centers)/sigma))/sigma
+                set model 1 bins = model*observations*width
+                set likelihood 1 bins = counts*log(model)-model-%lngamma(counts+1)
+                accumumate likelihood 1 bins
+                compute logl=likelihood(bins)
+            }
+        end find
+
+        set chisq = (counts-model)**2/model
+        set dof = %if(counts.gt.0,1,0)
+        accumulate chisq
+        accumulate dof
+        cdf(title='Poisson Statistics for Fitted Model',print=print) chisquared %maxvalue(chisq) bins-%nreg
+
+        if plot
+        {
+            if spgraph
+            {
+                spgraph(window=heading,height=spheight,width=spwidth)
+            }
+
+            if vlog.ne.1.
+            {
+                set counts = %iszero(counts,%na)
+            }
+
+            scatter(hlabel=hlabel,vlabel=vlabel,hmin=lower,hmax=upper,style=barchart,heading=heading,subheading=subheading,overlay=line,ovcount=1,ovsamescale,hlog=hlog,vlog=vlog,vmax=vmax,vmin=vmin,footer=footer) 2
+            # centers counts 1 bins barcol
+            # centers model 1 bins linecol
+        }
+        else
+        {
+            return
+        }
+    }
+
+    if %defined(frequencies)
+    {
+        clear frequencies
+        set frequencies 1 bins = counts
+    }
+
+    if %defined(vertices)
+    {
+        clear vertices
+        set vertices 1 bins = centers
+    }
+
+    statistics(noprint,nomoments,fractiles) counts 1 bins
+    compute title=''
+
+    if entries.and.samples
+    {
+        display(store=addtitle) 'Entries' nobs %datelabel(lstart) '--' %datelabel(lend)
+        compute title=title+addtitle+'\\'
+    }
+
+    if overflows.and.samples
+    {
+        set counts lstart lend = series.gt.upper
+        accumulate counts lstart lend
+        display(store=addtitle) 'Overflows  ' fix(%maxvalue(counts))
+        compute title=title+addtitle+'\\'
+    }
+
+    if underflows.and.samples
+    {
+        set counts lstart lend = series.lt.lower
+        accumulate counts lstart lend
+        display(store=addtitle) 'Underflows ' fix(%maxvalue(counts))
+        compute title=title+addtitle+'\\'
+    }
+
+    if statistics
+    {
+        statistics series lstart lend
+
+        if mean
+        {
+            display(store=addtitle) 'Sample Mean' %mean %signif
+            compute title=title+addtitle+'\\'
+        }
+
+        if stdev
+        {
+            display(store=addtitle) 'Sample S.D.' sqrt(%variance)
+            compute title=title+addtitle+'\\'
+        }
+
+        if skewness
+        {
+            display(store=addtitle) 'Skewness   ' %skewness
+            compute title=title+addtitle+'\\'
+        }
+
+        if kurtosis
+        {
+            display(store=addtitle) 'Ex.Kurtosis' %kurtosis
+            compute title=title+addtitle+'\\'
+        }
+
+        if jbtest
+        {
+            display(store=addtitle) 'Jarque-Bera' %jbstat %jbsignif
+            compute title=title+addtitle+'\\'
+        }
+    }
+
+    if fit.gt.1.and.estimates
+    {
+        if parameters
+        {
+            display(store=addtitle) 'mu         ' %beta(1);*%stderrs(1)
+            compute title=title+addtitle+'\\'
+            display(store=addtitle) 'sigma      ' %beta(2);*%stderrs(2)
+            compute title=title+addtitle+'\\'
+
+            if fit.eq.3.or.fit.eq.4
+            {
+                display(store=addtitle) 'nu         ' %beta(3);*%stderrs(3)
+                compute title=title+addtitle+'\\'
+                display(store=addtitle) 'obs.       ' %beta(4);*%stderrs(4)
+            }
+            else
+            {
+                display(store=addtitle) 'obs.       ' %beta(3);*%stderrs(3)
+            }
+
+            compute title=title+addtitle+'\\'
+        }
+
+        if goodness
+        {
+            if aic
+            {
+                display(store=addtitle) 'AIC/dof' %akaike(%logl,%nreg,%nobs) '/' %nobs-%nreg
+            }
+            else
+            {
+                display(store=addtitle) 'Chi.Sq./dof' %cdstat '/' bins-%nreg
+            }
+
+            compute title=title+addtitle+'\\'
+        }
+    }
+
+    if winloss
+    {
+        @winloss(print=print) series start end
+        display(store=addtitle) 'Win/Loss Stat.' %winloss
+        compute title=title+addtitle+'\\'
+    }
+
+    if title.ne.''
+    {
+        grtext(position=labelpos,alignment=left,font='Courier New',box) title
+    }
+
+    if spgraph
+    {
+        spgraph(done)
+    }
+end
+
+* analysis of drawdowns in a series
+procedure drawdowns series start end
+    type series series
+    type integer start end
+    local real peak ddn
+    local integer count startl endl i num
+    local series valuel lengthl
+    option choice mode 1 value return
+    option series *value
+    option series *length
+    option switch print 1
+    option series *indicator
+    inquire(series=series) startl>>start endl>>end
+    set valuel = %na
+    set lengthl = %na
+    compute num=0,peak=series(startl),count=0,ddn=0.
+
+    if %defined(indicator)
+    {
+        clear indicator
+        set indicator startl endl = 0
+    }
+
+    do i=startl+1,endl
+        if series(i).lt.peak
+        {
+            compute count=count+1,ddn=%if(%valid(series(i)),%max(ddn,peak-series(i)),ddn)
+            if %defined(indicator)
+            {
+                set indicator i i = 1
+            }
+        }
+        else
+        {
+            if count.gt.0
+            {
+                compute num=num+1
+                set valuel num num = %if(mode.eq.1,ddn,ddn/peak)
+                set lengthl num num = count
+            }
+            compute peak=series(i),count=0,ddn=0.
+        }
+    end do
+
+    if series(endl).lt.peak
+    {
+        compute num=num+1
+        set valuel num num = %if(mode.eq.1,ddn,ddn/peak)
+        set lengthl num num = count
+    }
+
+    if %defined(value)
+    {
+        clear value
+        set value 1 num = valuel
+    }
+
+    if %defined(length)
+    {
+        clear length
+        set length 1 num = lengthl
+    }
+
+    if mode.eq.1
+    {
+        label valuel
+        # 'Drawdown'
+    }
+    else
+    {
+        label valuel
+        # 'Rel. Drawdown'
+    }
+
+    statistics(print=print) valuel
+end
+*
+* THE BETA FUNCTION
+*
+FUNCTION %BETAFN A B
+    TYPE REAL %BETAFN
+    TYPE REAL A B
+    COMPUTE %BETAFN=EXP(%LNGAMMA(A)+%LNGAMMA(B)-%LNGAMMA(A+B))
+END
+*
+* THE NORMALIZED LOWER INCOMPLETE GAMMA FUNCTION gamma(a,x)/GAMMA(a)
+* NUMERICAL RECIPIES, P219
+*
+FUNCTION %ligamma A X
+    TYPE REAL %ligamma A X
+    LOCAL INTEGER ITMAX N
+    LOCAL REAL EPS SUM DEL AP GLN
+    COMPUTE ITMAX=100,EPS=3.0E-7,%ligamma=%NA
+
+    IF X>0.0
+    {
+        COMPUTE AP=A,DEL=1.0/A,SUM=1.0/A
+
+        DO N=1,ITMAX
+            COMPUTE AP=AP+1
+            COMPUTE DEL=DEL*X/AP
+            COMPUTE SUM=SUM+DEL
+
+            IF ABS(DEL)<ABS(SUM)*EPS
+            {
+                COMPUTE %ligamma=SUM*EXP(-X+A*LOG(X)-%LNGAMMA(A))
+                BREAK
+            }
+        END DO
+    }
+END
+*
+* THE NORMALIZED UPPER INCOMPLETE GAMMA FUNCTION GAMMA(A,X)/GAMMA(A)
+* NUMERICAL RECIPIES, P219
+*
+FUNCTION %uigamma A X
+    TYPE REAL %uigamma A X
+    LOCAL INTEGER ITMAX N
+    LOCAL REAL EPS FPMIN AN B C D DEL H
+    COMPUTE ITMAX=100,EPS=3.0E-7,FPMIN=1.0E-30
+    COMPUTE B=X+1.0-A,C=1.0/FPMIN
+    COMPUTE D=1.0/B
+    COMPUTE H=D
+
+    DO N=1,ITMAX
+        COMPUTE AN=-FLOAT(N)*(FLOAT(N)-A),B=B+2.0
+        COMPUTE D=AN*D+B
+
+        IF ABS(D)<FPMIN
+            COMPUTE D=FPMIN
+
+        COMPUTE C=B+AN/C
+
+        IF ABS(C)<FPMIN
+            COMPUTE C=FPMIN
+
+        COMPUTE D=1.0/D
+        COMPUTE DEL=D*C
+        COMPUTE H=H*DEL
+
+        IF ABS(DEL-1.0)<EPS
+            BREAK
+    END DO
+
+    COMPUTE %uigamma=EXP(-X+A*LOG(X)-%LNGAMMA(A))*H
+END
+*
+* ASYMPTOTIC CDF FOR KOLMOGOROV-SMIRNOV STATISTIC
+* NUMERICAL RECIPIES, P626
+*
+FUNCTION %KOLMOGOROV ALAM
+    TYPE REAL %KOLMOGOROV
+    TYPE REAL ALAM
+    LOCAL INTEGER JTER ICON
+    LOCAL REAL A2 FAC SUM TERM TERMBF
+    COMPUTE %KOLMOGOROV=1.0
+    COMPUTE FAC=2.0,SUM=0.0,TERMBF=0.0,ICON=0
+    COMPUTE A2=-FAC*ALAM*ALAM
+
+    DO JTER=1,100
+        COMPUTE TERM=FAC*EXP(A2*JTER*JTER)
+        COMPUTE SUM=SUM+TERM
+
+        IF ABS(TERM).LE.0.001*TERMBF.OR.ABS(TERM).LE.0.00000001*SUM
+        {
+            COMPUTE ICON=1
+            BREAK
+        }
+
+        COMPUTE FAC=-FAC,TERMBF=ABS(TERM)
+    END DO
+
+    IF ICON.EQ.1
+        COMPUTE %KOLMOGOROV=SUM
+END
+*
+* HYPERGEOMETRIC FUNCTION 2F1(a,b;c;x) FOR REAL ARGUMENTS x<1
+*
+FUNCTION %HYPERSUM AIN BIN CIN X DERROR MAXITER
+    TYPE REAL %HYPERSUM
+    TYPE REAL AIN BIN CIN X DERROR MAXITER
+    LOCAL REAL N TERM OTERM A B C HYPERSUM
+    COMPUTE A=AIN,B=BIN,C=CIN
+    COMPUTE HYPERSUM=1.0,N=1.0,TERM=A*B*X/C,OTERM=0.0
+
+    LOOP
+        COMPUTE HYPERSUM=HYPERSUM+TERM,A=A+1.0,B=B+1.0,C=C+1.0,N=N+1.0
+        COMPUTE OTERM=TERM
+        COMPUTE TERM=TERM*A*B*X/(N*C)
+
+        IF ABS(OTERM-TERM).LT.DERROR.OR.ABS(HYPERSUM).LT.DERROR.OR.N.GT.MAXITER
+        {
+            BREAK
+        }
+    END LOOP
+
+    compute %hypersum=hypersum
+END
+
+FUNCTION %HYPERGEOMETRIC A B C X
+    TYPE REAL %HYPERGEOMETRIC
+    TYPE REAL A B C X
+    LOCAL REAL XX BB HYPERGEOM
+    COMPUTE HYPERGEOM=%NA,XX=X,BB=B
+
+    IF XX<=0.0
+    {
+        COMPUTE XX=XX/(XX-1.0),BB=C-B
+    }
+
+    COMPUTE HYPERGEOM=%HYPERSUM(A,BB,C,XX,1E-13,1000)
+
+    IF X<=0.0
+    {
+        COMPUTE HYPERGEOM=HYPERGEOM/(1.0-X)**A
+    }
+
+    compute %hypergeometric=hypergeom
+END
+*
+* linear regression scatter plot
+*
+procedure linregplot xseries yseries begin end
+
+    type series xseries yseries
+    type integer begin end
+    local integer beginl endl
+    local series xxseries yyseries mseries useries
+    local string title addtitle
+    local real hminl hmaxl vminl vmaxl
+    option switch print 1
+    option choice key 1 none upleft upright loleft loright above below left right
+    option choice labelpos 2 none upleft upright loleft loright above below left right
+    option string klabel ''
+    option string hlabel %l(xseries)
+    option string vlabel %l(yseries)
+    option string heading ''
+    option string subheading ''
+    option real hmin
+    option real hmax
+    option real vmin
+    option real vmax
+    option choice overlay 3 dots symbols line bar poly
+    option choice style 1 dots symbols line bar poly
+    option switch identityline 0
+    option switch model 1
+    option switch rsq 1
+    option real spacing 0.075
+    option switch spgraph 1
+    option switch showlast 0
+    local series lastx
+    local series lasty
+    option real intercept 0.
+    option real gradient 0.
+    option real igradient %if(%defined(gradient),gradient,1e0)
+    option real iintercept %if(%defined(intercept),intercept,0e0)
+    option integer hfield
+    option integer vfield
+    option series spread
+    option string footer %defooter
+    option switch robust 0
+    option real hlog 1.
+    option real vlog 1.
+    option real spheight 10.
+    option real spwidth 16.18033988749895
+
+    inquire(series=xseries) beginl>>begin endl>>end
+
+    if %defined(spread)
+    {
+        if robust
+        {
+            rreg(print=print,spread=spread) yseries beginl endl
+            # constant xseries
+        }
+        else
+        {
+            linreg(print=print,spread=spread) yseries beginl endl
+            # constant xseries
+        }
+    }
+    else
+    {
+    	  if robust
+    	  {
+	         rreg(print=print) yseries beginl endl
+    	      # constant xseries
+    	  }
+    	  else
+    	  {
+	        linreg(print=print) yseries beginl endl
+    	     # constant xseries
+    	  }
+    }
+
+    set mseries beginl endl = %beta(1)+%beta(2)*xseries
+
+    if .not.%defined(klabel)
+    {
+        if %beta(2).ge.0.
+        {
+            display(store=title) #.## %beta(1) '+' %beta(2) %l(xseries)
+        }
+        else
+        {
+            display(store=title) #.## %beta(1) %beta(2) %l(xseries)
+        }
+    }
+    else
+    {
+        compute title=klabel
+    }
+
+    sstats(minimum) beginl endl (%if(%defined(hmin),hmin,xseries))>>hminl
+    sstats(maximum) beginl endl (%if(%defined(hmax),hmax,xseries))>>hmaxl
+    sstats(minimum) beginl endl (%if(%defined(vmin),vmin,yseries))>>vminl
+    sstats(maximum) beginl endl (%if(%defined(vmax),vmax,yseries))>>vmaxl
+
+    label mseries useries
+    # title 'Identity'
+
+    if spgraph
+    {
+        spgraph(window=heading,height=spheight,width=spwidth)
+    }
+
+    if identityline
+    {
+        set xxseries beginl endl = xseries
+        set yyseries beginl endl = yseries
+        set useries beginl endl = xseries*igradient+iintercept
+        order xxseries beginl endl yyseries mseries useries
+
+        if .not.spgraph.and.%defined(hfield).and.%defined(vfield)
+        {
+            scatter(ovcount=2,overlay=line,ovsamescale,key=key,hlabel=hlabel,vlabel=vlabel,heading=heading,subheading=subheading,hmin=hminl,hmax=hmaxl,vmin=vminl,vmax=vmaxl,footer=footer,window=heading,$
+                hlog=hlog,vlog=vlog) 3 hfield vfield
+            # xxseries yyseries beginl endl
+            # xxseries mseries beginl endl
+            # xxseries useries beginl endl
+        }
+        else
+        {
+            scatter(ovcount=2,overlay=line,ovsamescale,key=key,hlabel=hlabel,vlabel=vlabel,heading=heading,subheading=subheading,hmin=hminl,hmax=hmaxl,vmin=vminl,vmax=vmaxl,footer=footer,window=heading,$
+                hlog=hlog,vlog=vlog) 3
+            # xxseries yyseries beginl endl
+            # xxseries mseries beginl endl
+            # xxseries useries beginl endl
+        }
+    }
+    else
+    {
+        set xxseries beginl endl = xseries
+        set yyseries beginl endl = yseries
+        order xxseries beginl endl yyseries mseries
+
+        if .not.spgraph.and.%defined(hfield).and.%defined(vfield)
+        {
+            scatter(ovcount=1,overlay=line,ovsamescale,key=key,hlabel=hlabel,vlabel=vlabel,heading=heading,subheading=subheading,hmin=hminl,hmax=hmaxl,vmin=vminl,vmax=vmaxl,footer=footer,window=heading,$
+                hlog=hlog,vlog=vlog) 2 hfield vfield
+            # xxseries yyseries beginl endl
+            # xxseries mseries beginl endl
+        }
+        else
+        {
+            scatter(ovcount=1,overlay=line,ovsamescale,key=key,hlabel=hlabel,vlabel=vlabel,heading=heading,subheading=subheading,hmin=hminl,hmax=hmaxl,vmin=vminl,vmax=vmaxl,footer=footer,window=heading,$
+                hlog=hlog,vlog=vlog) 2
+            # xxseries yyseries beginl endl
+            # xxseries mseries beginl endl
+        }
+    }
+
+    if model.or.rsq
+    {
+		  if robust
+        {
+            compute title='Robust Regression:'
+        }
+        else
+        {
+            compute title='Linear Regression:'
+		  }
+
+        if %defined(spread)
+        {
+			    compute title='Weighted '+title
+		  }
+
+        if model
+        {
+            display(store=addtitle) 'intercept =' ###.###### %beta(1) '±' %stderrs(1) 't =' (%beta(1)-intercept)/%stderrs(1)
+            compute title=title+'\\'+addtitle
+            display(store=addtitle) 'gradient  =' ###.###### %beta(2) '±' %stderrs(2) 't =' (%beta(2)-gradient)/%stderrs(2)
+            compute title=title+'\\'+addtitle
+        }
+
+        if rsq.and..not.robust
+        {
+            display(store=addtitle) 'R^2 =' ##.##### %rsquared
+            compute title=title+'\\'+addtitle
+        }
+
+        display(store=addtitle) 'Observations = '+%string(%nobs)
+        compute title=title+'\\'+addtitle
+        grtext(position=labelpos,align=left,font='Courier New',box) title
+    }
+
+    if spgraph
+    {
+        spgraph(done)
+    }
+end
+*
+* linear regression scatter plot (quadratic function)
+*
+procedure quadregplot xseries yseries begin end
+
+    type series xseries yseries
+    type integer begin end
+    local integer beginl endl
+    local series xxseries yyseries mseries useries qseries
+    local string title addtitle
+    local real hminl hmaxl vminl vmaxl
+    option switch print 1
+    option choice key 1 none upleft upright loleft loright above below left right
+    option choice labelpos 2 none upleft upright loleft loright above below left right
+    option string klabel ''
+    option string hlabel %l(xseries)
+    option string vlabel %l(yseries)
+    option string heading ''
+    option string subheading ''
+    option real hmin
+    option real hmax
+    option real vmin
+    option real vmax
+    option choice overlay 3 dots symbols line bar poly
+    option choice style 1 dots symbols line bar poly
+    option switch identityline 0
+    option real igradient 1.
+    option switch model 1
+    option switch rsq 1
+    option real spacing 0.075
+    option switch spgraph 1
+    option switch showlast 0
+    local series lastx
+    local series lasty
+    option real intercept 0.
+    option real gradient 0.
+    option real quadratic 0.
+    option integer hfield
+    option integer vfield
+    option series spread
+    option string footer %defooter
+    option real height 10
+    option real width 10*%goldenratio
+
+    inquire(series=xseries) beginl>>begin endl>>end
+
+    set qseries = 0.5*xseries*xseries
+    linreg(print=print,spread=spread) yseries beginl endl
+    # constant xseries qseries
+    set mseries beginl endl = %beta(1)+%beta(2)*xseries+%beta(3)*qseries
+
+    if .not.%defined(klabel)
+    {
+        if %beta(2).ge.0.
+        {
+            display(store=title) #.## %beta(1) '+' %beta(2) %l(xseries)
+        }
+        else
+        {
+            display(store=title) #.## %beta(1) %beta(2) %l(xseries)
+        }
+    }
+    else
+    {
+        compute title=klabel
+    }
+
+    compute hminl=%if(%defined(hmin),hmin,%minvalue(xseries))
+    compute hmaxl=%if(%defined(hmax),hmax,%maxvalue(xseries))
+    compute vminl=%if(%defined(vmin),vmin,%min(%minvalue(yseries),%minvalue(mseries)))
+    compute vmaxl=%if(%defined(vmax),vmax,%max(%maxvalue(yseries),%maxvalue(mseries)))
+    label mseries useries
+    # title 'Identity'
+
+    if spgraph
+    {
+        spgraph(window=heading,height=height,width=width)
+    }
+
+    if identityline
+    {
+        set xxseries beginl endl = xseries
+        set yyseries beginl endl = yseries
+        set useries beginl endl = xseries*igradient
+        order xxseries beginl endl yyseries mseries useries
+
+        if .not.spgraph.and.%defined(hfield).and.%defined(vfield)
+        {
+            scatter(ovcount=2,overlay=line,ovsamescale,key=key,hlabel=hlabel,vlabel=vlabel,heading=heading,subheading=subheading,hmin=hminl,hmax=hmaxl,vmin=vminl,vmax=vmaxl,footer=footer,window=heading) 3 hfield vfield
+            # xxseries yyseries beginl endl
+            # xxseries mseries beginl endl
+            # xxseries useries beginl endl
+        }
+        else
+        {
+            scatter(ovcount=2,overlay=line,ovsamescale,key=key,hlabel=hlabel,vlabel=vlabel,heading=heading,subheading=subheading,hmin=hminl,hmax=hmaxl,vmin=vminl,vmax=vmaxl,footer=footer,window=heading) 3
+            # xxseries yyseries beginl endl
+            # xxseries mseries beginl endl
+            # xxseries useries beginl endl
+        }
+    }
+    else
+    {
+        if .not.spgraph.and.%defined(hfield).and.%defined(vfield)
+        {
+            scatter(ovcount=1,overlay=line,ovsamescale,key=key,hlabel=hlabel,vlabel=vlabel,heading=heading,subheading=subheading,hmin=hminl,hmax=hmaxl,vmin=vminl,vmax=vmaxl,footer=footer,window=heading) 2 hfield vfield
+            # xseries yseries beginl endl
+            # xseries mseries beginl endl
+        }
+        else
+        {
+            scatter(ovcount=1,overlay=line,ovsamescale,key=key,hlabel=hlabel,vlabel=vlabel,heading=heading,subheading=subheading,hmin=hminl,hmax=hmaxl,vmin=vminl,vmax=vmaxl,footer=footer,window=heading) 2
+            # xseries yseries beginl endl
+            # xseries mseries beginl endl
+        }
+    }
+
+    if model.or.rsq
+    {
+        if model
+        {
+            display(store=addtitle) 'intercept  =' ###.###### %beta(1) '±' %stderrs(1) 't =' (%beta(1)-intercept)/%stderrs(1)
+            compute title=title+'\\'+addtitle
+            display(store=addtitle) 'gradient   =' ###.###### %beta(2) '±' %stderrs(2) 't =' (%beta(2)-gradient)/%stderrs(2)
+            compute title=title+'\\'+addtitle
+            display(store=addtitle) 'quadratic  =' ###.###### %beta(3) '±' %stderrs(3) 't =' (%beta(3)-quadratic)/%stderrs(3)
+            compute title=title+'\\'+addtitle
+        }
+
+        if rsq
+        {
+            display(store=addtitle) 'R^2 =' ##.##### %rsquared
+            compute title=title+'\\'+addtitle
+        }
+
+        display labelpos
+        grtext(align=left,box) title
+    }
+
+    if spgraph
+    {
+        spgraph(done)
+    }
+end
+
+* function computes the truncated alpha, which is the expected return after costs
+function %truncate alpha tcost
+    type real %truncate alpha tcost
+    compute %truncate=%sign(alpha)*%max(abs(alpha)-tcost,0.)
+end
+
+function %vtruncate alpha tcost
+    type vector[real] %vtruncate alpha tcost
+    local integer i nr
+    compute nr=%rows(alpha)
+    dimension %vtruncate(nr)
+
+    do i=1,nr
+        compute %vtruncate(i)=%truncate(alpha(i),tcost(i))
+    end do
+end
+
+function %vabs x
+    type vector %vabs x
+    local integer i n
+    compute n=%rows(x)
+    dimension %vabs(n)
+    ewise %vabs(i)=abs(x(i))
+end
+
+* two functions to support stock trading
+function %transcost tradesize
+    type real %transcost tradesize
+    local real ts
+    compute ts=abs(tradesize)
+    compute %transcost=%if(ts.le.500.,0.01*ts,5.+(ts-500.)*0.005)
+
+end
+function %portfolio vinv alpha price caplev prec costmult
+    type vector %portfolio
+    type symmetric vinv
+    type vector alpha price
+    type real caplev prec costmult
+    local vector atrun tcost
+    local integer i n iter
+    local real risk capital orisk
+    compute n=%rows(vinv)
+    dimension atrun(n) tcost(n) %portfolio(n)
+    ewise %portfolio(i)=100.*%sign(alpha(i))
+    compute orisk=0.,risk=1.0,iter=100
+
+    until abs(risk-orisk).lt.prec.or.iter.eq.0
+    {
+        compute orisk=risk
+        ewise tcost(i)=%if(%noprec(%portfolio(i)),0.,costmult*%transcost(%portfolio(i))/%portfolio(i))
+        compute atrun=%vtruncate(alpha,tcost)
+        compute %portfolio=vinv*atrun
+        compute capital=0.5*%dot(%vabs(%portfolio),price)
+        ewise %portfolio(i)=%round(%portfolio(i)*caplev/capital,-2)
+        compute risk=sqrt(%qform(vinv,%portfolio))
+        compute iter=iter-1
+    }
+end
+
+* fisher correlation coefficient transformation
+function %fisher rho
+    type real %fisher rho
+    compute %fisher=0.5*log((1.+rho)/(1.-rho))
+end
+
+function %invfisher fisher
+    type real %invfisher fisher
+    compute %invfisher=(exp(2.*fisher)-1.)/(exp(2.*fisher)+1.)
+end
+
+* moving correlation function
+function %correlation x y b e
+    type real %correlation
+    type series x y
+    type integer b e
+    local symmetric rho
+    dimension rho(2,2)
+    cmoment(noprint,correlation,center,matrix=rho) b e
+    # x y
+    compute %correlation=rho(1,2)
+end
+
+* computes the Sharpe Ratio (assuming the RFR is zero)
+procedure sharpe series begin end
+
+    type series series
+    type integer begin
+    type integer end
+    local integer beginl
+    local integer endl
+    option switch print 1
+    option switch statistics print
+    option switch returns 0
+    option string title
+    declare real %sharpe
+    option integer periods 252
+    option series weights
+    local series sample
+
+    inquire(series=series) beginl<<begin endl<<end
+    set sample beginl endl = %valid(series)
+    accumulate sample beginl endl
+
+    if sample(endl).ge.3
+    {
+        if %defined(weights)
+        {
+	        statistics(print=statistics,weights=weights,title=title) series beginl endl
+        }
+        else
+        {
+	        statistics(print=statistics,title=title) series beginl endl
+        }
+
+        if returns
+        {
+            compute %sharpe=((1.+%mean)**periods-1.)/sqrt(float(periods)*%variance)
+        }
+        else
+        {
+            compute %sharpe=%mean*sqrt(float(periods)/%variance)
+        }
+    }
+    else
+    {
+        compute %sharpe=%na
+    }
+
+    if print
+    {
+        display 'Sharpe Ratio' #.###### %sharpe
+    }
+end
+
+* here are some functions for working with 32 bit binary numbers
+* the binaries are stored as bit strings; the decimals are signed integers; and, the functions handle the 2's complements properly for 32 bit words
+* %binary(d) converts d to binary
+* %decimal(b) converts b to a decimal (signed integer)
+* %band,%bor,%bnot,%bxor are Boolean logic functions, they work with any length bit strings
+* %bits returns a list of the set bits in the given bit string
+* %iand,%ior,%ixor are like the Fortran functions of the same name, they work on signed 32 bit integers (C long, Fortran integer*4)
+
+function %binary number
+    type integer number
+    type string %binary
+    local integer i j k
+
+    if number.lt.0
+    {
+        compute %binary="1",i=-number-1
+    }
+    else
+    {
+        compute %binary="0",i=number
+    }
+
+    do j=30,0,-1
+        compute k=2**j
+
+        if %idiv(i,k).ge.1
+        {
+           compute i=i-k
+
+           if number.lt.0
+           {
+               compute %binary=%binary+"0"
+           }
+           else
+           {
+               compute %binary=%binary+"1"
+           }
+        }
+        else
+        {
+           if number.lt.0
+           {
+               compute %binary=%binary+"1"
+           }
+           else
+           {
+               compute %binary=%binary+"0"
+           }
+        }
+    end do
+end
+
+function %decimal number
+    type string number
+    type integer %decimal
+    local integer isign i j
+
+    if %left(number,1).eq."1"
+    {
+        compute isign=-1
+    }
+    else
+    {
+        compute isign=1
+    }
+
+    compute %decimal=0
+
+    do i=30,0,-1
+        compute j=2**i
+
+        if %mid(number,32-i,1).eq."1".and.isign.gt.0.or.%mid(number,32-i,1).eq."0".and.isign.lt.0
+        {
+            compute %decimal=%decimal+j
+        }
+    end do
+
+    if isign.lt.0
+    {
+        compute %decimal=isign*(%decimal+1)
+    }
+end
+
+function %bnot number
+    type string %bnot number
+    local integer i l
+    compute %bnot="",l=%strlen(number)
+
+    do i=1,l
+        if %mid(number,i,1).eq."1"
+        {
+            compute %bnot=%bnot+"0"
+        }
+        else
+        {
+            compute %bnot=%bnot+"1"
+        }
+    end do
+end
+
+function %band n1 n2
+    type string n1 n2 %band
+    local integer i l
+    compute %band="",l=fix(%min(float(%strlen(n1)),float(%strlen(n2))))
+
+    do i=1,l
+        if %mid(n1,i,1).eq."1".and.%mid(n2,i,1).eq."1"
+        {
+            compute %band=%band+"1"
+        }
+        else
+        {
+            compute %band=%band+"0"
+        }
+    end do
+end
+
+function %bor n1 n2
+    type string n1 n2 %bor
+    local integer i l
+    compute %bor="",l=fix(%min(float(%strlen(n1)),float(%strlen(n2))))
+
+    do i=1,l
+        if %mid(n1,i,1).eq."1".or.%mid(n2,i,1).eq."1"
+        {
+            compute %bor=%bor+"1"
+        }
+        else
+        {
+            compute %bor=%bor+"0"
+        }
+    end do
+end
+
+function %bxor n1 n2
+    type string n1 n2 %bxor
+    local integer i l
+    compute %bxor="",l=fix(%min(float(%strlen(n1)),float(%strlen(n2))))
+
+    do i=1,l
+        if %mid(n1,i,1).ne.%mid(n2,i,1)
+        {
+            compute %bxor=%bxor+"1"
+        }
+        else
+        {
+            compute %bxor=%bxor+"0"
+        }
+    end do
+end
+
+function %bits number
+    type string number
+    type vector[integer] %bits
+    local integer i n l
+    compute n=0,l=%strlen(number)
+
+    do i=1,l
+        if %mid(number,i,1).eq."1"
+        {
+            compute n=n+1
+        }
+    end do
+
+    if n.gt.0
+    {
+        dimension %bits(n)
+
+        do i=1,l
+            if %mid(number,i,1).eq."1"
+            {
+                compute %bits(n)=l+1-i,n=n-1
+            }
+        end do
+    }
+    else
+    {
+        dimension %bits(1)
+        compute %bits(1)=0
+    }
+end
+
+function %iand i1 i2
+    type integer %iand i1 i2
+    compute %iand=%decimal(%band(%binary(i1),%binary(i2)))
+end
+
+function %ior i1 i2
+    type integer %ior i1 i2
+    compute %ior=%decimal(%bor(%binary(i1),%binary(i2)))
+end
+
+function %ixor i1 i2
+    type integer %ixor i1 i2
+    compute %ixor=%decimal(%bxor(%binary(i1),%binary(i2)))
+end
+
+* this procedure can be used to convert a series loaded with a sevenday calendar into a series with a daily calendar
+* this is intended to help load panel data from the database into rats as panel data cannot be specified by date in the file only by period code
+procedure resample series
+    type series *series
+    local series weekday
+    local vector[integer] calendar
+    compute calendar=%calendar()
+    calendar(sevenday) calendar(7) calendar(8) calendar(9)
+    set weekday = %weekday(t).le.5
+    sample(smpl=weekday) series
+    calendar(daily) calendar(7) calendar(8) calendar(9)
+    set series = %if(t.gt.%today(),%na,series)
+end
+
+* procedure to fit volatility adjusted since factor GARCH(1,1) models
+* this procedure was written before RATS introduced the GARCH instruction
+procedure fitgarch u f b e
+    type series u f
+    type integer b e
+    local real mu beta sigma0 g1 g2 nu estrsq estlogl
+    local series h ua fa
+    local integer lb le estdof
+    local frml hmod rsdl logl
+    local string lsubheader
+    local vector[real] estbeta esterrs eststats
+    option switch print 1
+    option vector[real] initial
+    option switch report 1
+    option string header 'Dynamically Scaled GARCH(1,1)+CAPM Model'
+    option string subheader
+    option switch trace 0
+    option integer iterations 100
+    nonlin mu beta sigma0 g1 g2 nu
+
+    if %defined(initial)
+    {
+        compute mu=initial(1),beta=initial(2),sigma0=initial(3),g1=initial(4),g2=initial(5),nu=initial(6)
+    }
+    else
+    {
+        compute mu=0.,beta=0.5,sigma0=0.01,g1=0.95,g2=0.03,nu=1.
+    }
+
+    inquire(series=u) lb>>b le>>e
+    set h lb le = sigma0**2/(1.-g1-g2)
+    frml hmod = sigma0**2 $
+              + g1*%if(%valid(h{1}),h{1},%if(%valid(h{2}),h{2},%if(%valid(h{3}),h{3},sigma0**2/(1.-g1-g2)))) $
+              + g2*%if(%valid(u{1}),u{1}**2,%if(%valid(u{2}),u{2}**2,%if(%valid(u{3}),u{3}**2,sigma0**2/(1.-g1-g2))))
+    frml rsdl = u-(mu+beta*sqrt(h)*f)
+    frml logl = (h=hmod(t)),%loggeddensity(rsdl,nu,h)
+    maximize(method=bfgs,print=print,trace=trace,iterations=iterations) logl lb le
+    dimension estbeta(%rows(%beta)) esterrs(%rows(%stderrs)) eststats(%rows(%tstats))
+    compute estbeta=%beta,esterrs=%stderrs,eststats=%tstats,estrsq=%rsquared,estdof=%nreg,estlogl=%logl
+
+    if report.eq.1
+    {
+        if .not.%defined(subheader)
+        {
+            compute lsubheader=%datelabel(lb)+' -- '+%datelabel(le)
+        }
+
+        spgraph(hfield=2,vfield=2,header=header,subheader=lsubheader,window=header)
+            accumulate u lb le ua
+            set fa lb le = beta*sqrt(h)*f
+            accumulate fa lb le
+            graph(style=line,hlabel='Series and Factor Component') 2
+            # ua lb le 1
+            # fa lb le 2
+            set h lb le = sqrt(h)
+            graph(style=line,hlabel='Daily Volatility Model')
+            # h lb le
+            set fa lb le = f*h
+            @linregplot(nospgraph,hlabel='Factor',vlabel='Series',key=none,labelpos=loleft,identityline,gradient=0.25,igradient=0.25) f u lb le
+            set h lb le = rsdl/h
+            @histogram(nospgraph,fit=error,hlabel='Standardized Residuals',nounderflow,nooverflow,statistics) h lb le
+        spgraph(done)
+    }
+
+    dimension %beta(%rows(estbeta)) %stderrs(%rows(esterrs)) %tstats(%rows(eststats))
+    compute %beta=estbeta,%stderrs=esterrs,%tstats=eststats,%rsquared=estrsq,%nreg=estdof,%logl=estlogl
+
+end procedure
+
+function %sqldate i
+
+    type integer i
+    type string %sqldate
+    local vector[integer] calendar
+    compute %sqldate=%left(%datelabel(i),10),%sqldate=%left(%sqldate,4)+'-'+%mid(%sqldate,6,2)+'-'+%right(%sqldate,2),calendar=%calendar()
+
+    if calendar(2).eq.1
+    {
+        if calendar(6).eq.4
+        {
+            compute %sqldate=%left(%sqldate,4)+'-'+%string(fix(3*%value(%right(%datelabel(i),1))))+'-01' ; *quarterly
+        }
+        else
+        {
+            compute %sqldate=%left(%sqldate,7)+'-01' ;* annual
+        }
+    }
+
+end function
+
+function %exceldate i
+
+    type int i
+    type string %exceldate
+    compute %exceldate=%string(%month(i))+'/'+%string(%day(i))+'/'+%string(%year(i))
+
+end function
+
+function %ifvalid s i
+
+    type series s
+    type int i
+    type real %ifvalid
+    compute %ifvalid=%if(%valid(s(i)),s(i),%if(%valid(s(i-1)),s(i-1),%if(%valid(s(i-2)),s(i-2),%if(%valid(s(i-3)),s(i-3),s(i-4)))))
+
+end function
+
+* set the calendar, I origninally wrote this as a generic calendar tool, but I don't use it anymore apart in this script itself
+procedure setcalendar y m d
+
+    type integer y m d
+    option switch print 1
+    option integer offset 0
+    option integer ey
+    option integer em
+    option integer ed
+    calendar(daily) y m d
+
+    if %defined(ey).and.%defined(em).and.%defined(ed)
+    {
+        allocate ey:em:ed-offset
+    }
+    else
+    {
+        allocate %today()-offset
+    }
+
+    clear(all)
+
+    smpl
+
+    if print.eq.1
+    {
+        display 'Weekday Calendar for '+%datelabel(1)+' -- '+%datelabel(%allocend())
+    }
+
+end procedure
+
+* get data from sql query
+procedure getfile path
+    type string path
+    open data &path
+    data(format=prn,organization=columns)
+    close data
+end
+
+procedure initialize y m d s
+    type integer y m d
+    type string s
+    option switch filemode 0
+    @setcalendar y m d
+
+    if filemode.eq.0
+    {
+       @getdata s
+    }
+    else
+    {
+       @getfile s
+    }
+end
+
+* %yesterday function
+function %yesterday
+    type integer %yesterday
+    compute %yesterday=%today()-1
+end
+
+* kolmogorov-smirnov test
+function %orderstat s x
+
+    type real %orderstat
+    type series s
+    type real x
+    local integer b
+    local integer e
+    local series c
+    local series d
+
+	 inquire(series=s) b e
+
+	 set c b e = %if(s.le.x,1.,0.)
+    accumulate c b e
+
+    set d b e = %if(%valid(s),1.,0.)
+    accumulate d b e
+
+    compute %orderstat=c(e)/d(e)
+
+end function
+
+procedure kolmogorovtest x beg end
+
+    type series x
+    type integer beg
+    type integer end
+    option choice distribution 2 normal error student empirical uniform extreme
+    option switch spgraph 1
+    option string header 'Kolmogorov-Smirnov Test for '+%l(x)
+    option string subheader
+    option vector[real] dpar ||0.,1.,1.||
+    option string hlabel
+    option string vlabel 'Cumulative Frequency'
+    option switch print 1
+    option series y
+    option real lower
+    option real upper
+    local series vx
+    local series md
+    local series os
+    local integer lb
+    local integer le
+    local integer i
+    local real osv
+    local string title
+    local real tkolmo
+    local series d
+    local integer nx ny
+    local real hmin
+    local real hmax
+    option string footer %defooter
+    option string xlabel 'Empirical'
+    option string ylabel 'Population'
+    option switch plot 1
+	 local string myxlabel
+	 local string myylabel
+    option real min 0e0
+    option real max 1e0
+    option integer adjust 0 ;* adjustment to dof of test
+    inquire(series=x) lb>>beg le>>end
+    statistics(noprint,fractiles) x lb le
+    compute nx=%nobs
+    compute hmax=%if(%defined(upper),upper,%maximum)
+    compute hmin=%if(%defined(lower),lower,%minimum)
+    compute myxlabel=%if(%defined(xlabel),xlabel,'Empirical')
+    compute myylabel=%if(%defined(xlabel),ylabel,'Empirical')
+
+    clear vx md os
+    set vx = float(t)/float(nx)*(hmax-hmin)+hmin
+
+    if distribution.eq.1
+    {
+	     set md lb le = %cdf((vx-dpar(1))/dpar(2))
+		  compute title='Distribution: Normal; Range: '
+    }
+    else if distribution.eq.2
+    {
+        set md lb le = %gedcdf((vx-dpar(1))/dpar(2),dpar(3))
+		  compute title='Distribution: Error; Range: '
+    }
+    else if distribution.eq.3
+    {
+        set md lb le = %tcdfnc((vx-dpar(1))/dpar(2),dpar(3),0.)
+		  compute title='Distribution: Student; Range: '
+    }
+    else if distribution.eq.5
+    {
+        set md lb le = 1
+        accumulate md lb le
+        set md lb le = md/nx
+		  compute title='Distribution: Uniform(0,1); Range: '
+    }
+    else if distribution.eq.6
+    {
+	     set md lb le = exp(-exp(-(vx-dpar(1))/dpar(2)))
+		  compute title='Distribution: Extreme; Range: '
+    }
+    else if distribution.eq.4
+    {
+        set md lb le = %na
+        statistics(noprint,fractiles) y
+        compute ny=%nobs
+
+        do i=lb,le
+            compute osv=%orderstat(y,vx(i))
+            set md i i = osv
+        end do
+
+        compute title='Distribution: Empirical; Range: '
+
+        if .not.%defined(xlabel)
+        {
+            compute myxlabel=%l(x)
+        }
+
+        if .not.%defined(ylabel)
+        {
+            compute myylabel=%l(y)
+        }
+    }
+
+    set os lb le = %na
+
+    do i=lb,le
+        compute osv=%orderstat(x,vx(i))
+        set os i i = osv
+    end do
+
+    set d lb le = abs(os-md)
+
+    if distribution.ne.4
+    {
+        compute tkolmo=sqrt(nx-adjust)*%maxvalue(d)
+    }
+    else
+    {
+        compute tkolmo=sqrt(nx*ny/(nx+ny)-adjust)*%maxvalue(d)
+    }
+
+	 if plot
+	 {
+   	 if spgraph
+    	 {
+            spgraph(height=10,width=10*%goldenratio,footer=footer)
+    	 }
+
+    	 if %defined(subheader)
+    	 {
+            compute title=subheader
+    	 }
+    	 else
+    	 {
+            compute title=title+%datelabel(lb)+' -- '+%datelabel(le)
+    	 }
+
+    	 scatter(style=line,hgrid=||vx(%maxindex(d))||,hmin=hmin,hmax=hmax,header=header,subheader=title,hlabel=hlabel,vlabel=vlabel,$
+    			key=loright,klabel=||myxlabel,myylabel||,window=header,height=10,width=10*%goldenratio,vmin=min,vmax=max) 2
+    	 # vx os
+    	 # vx md
+	 }
+
+	 compute %dmax=%maxvalue(d),%pkolmo=%kolmogorov(tkolmo),%signif=%pkolmo
+
+	 if plot
+	 {
+    	  if distribution.ne.4
+    	  {
+            display(store=title) 'Dmax   ' #.##### %dmax '\\Sample ' nx  '-' adjust '\\p-Value' %pkolmo
+    	  }
+    	  else
+    	  {
+            display(store=title) 'Dmax   ' #.##### %dmax '\\Sample ' nx ny  '-' adjust '\\p-Value' %pkolmo
+    	  }
+
+    	  grtext(position=upleft,box,font='Courier New',italic,size=12) title
+
+		  if spgraph
+    	  {
+            spgraph(done)
+    	  }
+	 }
+
+    if print
+    {
+        display ''
+        display 'Kolmogorov-Smirnov Test'
+        display ''
+
+        if distribution.eq.1
+        {
+            display 'Distribution: Normal' dpar(1) dpar(2)
+            display 'Sample:      ' %nobs '-' adjust
+        }
+        else if distribution.eq.2
+        {
+            display 'Distribution: Error' dpar
+            display 'Sample:      ' %nobs '-' adjust
+        }
+        else if distribution.eq.3
+        {
+            display 'Distribution: Student-t' dpar
+            display 'Sample:      ' %nobs  '-' adjust
+        }
+        else if distribution.eq.5
+        {
+            display 'Distribution: Uniform(0,1)'
+            display 'Sample:      ' %nobs '-' adjust
+        }
+        else if distribution.eq.6
+        {
+            display 'Distribution: Extreme' dpar(1) dpar(2)
+            display 'Sample:      ' %nobs '-' adjust
+        }
+        else if distribution.eq.4
+        {
+            display 'Distribution: Empirical'
+            display 'Sample:      ' nx ny '-' adjust
+        }
+        display 'Distance: ' %dmax
+        display 'p-Value:  ' %pkolmo
+    }
+end procedure
+
+* nice garch fitter package
+procedure fitgarch11 series b e
+
+    type series series
+    type integer b e
+    local series sample dseries sampled hmodel vmodel innov
+    local integer i j lb le
+    local vector[real] beta stderrs tstats
+    option integer p 1
+    option integer q 1
+    option switch print 1
+    option switch plot 1
+    option string header
+    option series variance
+    option choice mode 1 changes returns
+    option vector[real] initial
+    option choice distribution 3 normal t ged
+    option real vlog 1.
+    local string databox
+    option switch kolmogorov 0
+    option switch dates 1
+    option string footer %defooter
+    option switch asymmetric 0
+    option switch exponential 0
+    option real logl
+    option integer nreg
+    local real llogl
+    local integer lnreg
+    local string lheader
+    option series residuals
+    option series vseries
+    option real height 10.0
+    option real width 10.0*%goldenratio
+    option choice subplot 1 all volatilty residuals distribution
+
+    if .not.%defined(header)
+    {
+        compute lheader='GARCH'
+
+        if exponential
+        {
+            compute lheader='E'+lheader
+        }
+
+        if asymmetric
+        {
+            compute lheader='A'+lheader
+        }
+
+        compute lheader='Fit of '+lheader+'('+%string(p)+','+%string(q)+') Model to '+%l(series)
+    }
+    else
+    {
+        compute lheader=header
+    }
+
+    display lheader
+    inquire(series=series) lb>>b le>>e
+    display 'Analysis period: '+%datelabel(lb)+' -- '+%datelabel(le)
+    difference series / dseries
+
+    if mode.ne.1
+    {
+        set dseries / = dseries/series{1}
+    }
+
+    set sample lb le = %if(%valid(dseries),1,0)
+    sample(smpl=sample) dseries lb le sampled
+
+	 if %defined(initial)
+    {
+        garch(print=print,p=p,q=q,hseries=hmodel,distribution=distribution,exponential=exponential,asymmetric=asymmetric) lb le sampled
+    }
+    else
+    {
+        garch(print=print,p=p,q=q,hseries=hmodel,distribution=distribution,initial=initial,exponential=exponential,asymmetric=asymmetric) lb le sampled
+    }
+
+	 if %defined(logl).and.%defined(nreg)
+    {
+        cdf(title='Maximum Likelihood Ratio Test for Additional Parameters') chisquare 2.*(%logl-logl) %nreg-nreg
+    }
+
+    compute beta=%beta,stderrs=%stderrs,tstats=%tstats,lnreg=%nreg,llogl=%logl
+    compute j=1
+    set vmodel le le = %na
+
+    do i=lb,le
+        if %valid(dseries(i))
+        {
+            set vmodel i i = sqrt(hmodel(j))
+            compute j=j+1
+        }
+    end do
+
+    if %defined(variance)
+    {
+        set variance lb le = vmodel**2
+    }
+
+    if %defined(residuals)
+    {
+        set residuals lb le = (series-%beta(1))/vmodel
+    }
+
+	 if plot.eq.1
+    {
+        if mode.eq.1
+        {
+            compute databox='Driver: Changes'
+        }
+        else
+        {
+            compute databox='Driver: Returns'
+        }
+
+        if distribution.eq.1
+        {
+            compute databox=databox+'; Distribution: Normal'
+        }
+        else if distribution.eq.2
+        {
+            compute databox=databox+'; Distribution: Student'
+        }
+        else
+        {
+            compute databox=databox+'; Distribution: Error'
+        }
+
+        compute databox=databox+'; Period: '+%datelabel(lb)+' -- '+%datelabel(le)
+
+        spgraph(hfields=%if(subplot.eq.1,2,1),vfields=%if(subplot.eq.1,2,1),header=lheader,subheader=databox,footer=footer,height=height,width=width)
+
+            if subplot.eq.1
+            {
+                graph(vlabel=%l(series),log=vlog,dates=dates)
+                # series lb le
+            }
+
+            if subplot.eq.1.or.subplot.eq.2
+            {
+                graph(vlabel='Volatility',dates=dates)
+                # vmodel lb le
+            }
+
+            set innov lb le = dseries/vmodel{1}
+
+            if subplot.eq.1.or.subplot.eq.3
+            {
+                graph(vlabel='Innovations',dates=dates,style=spike)
+                # innov lb le
+
+                if .not.asymmetric
+                {
+                    display(store=databox) 'Analysis:'$
+                                +'\\Constant =' ####.##### beta(2) '±' stderrs(2) '(' tstats(2) ')'$
+                                +'\\MA(1)    =' ####.##### beta(3) '±' stderrs(3) '(' tstats(3) ')'$
+                                +'\\AR(1)    =' ####.##### beta(4) '±' stderrs(4) '(' tstats(4) ')'$
+                                +'\\Shape    =' ####.##### beta(5) '±' stderrs(5) '(' tstats(5) ')'
+                }
+                else
+                {
+                    display(store=databox) 'Analysis:'$
+                                +'\\Constant =' ####.##### beta(2) '±' stderrs(2) '(' tstats(2) ')'$
+                                +'\\MA(1)    =' ####.##### beta(3) '±' stderrs(3) '(' tstats(3) ')'$
+                                +'\\AR(1)    =' ####.##### beta(4) '±' stderrs(4) '(' tstats(4) ')'$
+                                +'\\Downside =' ####.##### beta(5) '±' stderrs(5) '(' tstats(5) ')'
+                }
+
+                grtext(font='Courier New',italic,box,position=upleft,size=10) databox
+            }
+
+            if subplot.eq.1.or.subplot.eq.4
+            {
+                if .not.kolmogorov
+                {
+                    if distribution.eq.1
+                    {
+                        @histogram(fit=normal,nospgraph,hlabel='Innovations',vlabel='Frequency',bins=101,footer='',nogoodness,statistics,jbtest,nomean,nostdev) innov
+                    }
+                    else if distribution.eq.2.
+                    {
+                        @histogram(fit=student,nospgraph,hlabel='Innovations',vlabel='Frequency',bins=101,footer='',nogoodness) innov lb le
+                    }
+                    else
+                    {
+                        @histogram(fit=error,nospgraph,hlabel='Innovations',vlabel='Frequency',bins=101,footer='',nogoodness) innov lb le
+                    }
+                }
+                else
+                {
+                    label innov
+                    # %l(series)
+
+                    if distribution.eq.1
+                    {
+                        @kolmogorovtest(distribution=normal,print=print,footer='') innov lb le
+                    }
+                    else if distribution.eq.2.
+                    {
+                        @kolmogorovtest(distribution=student,print=print,dpar=||0.,1.,beta(5)||,footer='') innov lb le
+                    }
+                    else
+                    {
+                        @kolmogorovtest(distribution=error,print=print,dpar=||0.,1.,beta(5)||,footer='') innov lb le
+                    }
+                }
+            }
+
+        spgraph(done)
+    }
+
+    compute %beta=beta,%stderrs=stderrs,%tstats=tstats,%logl=llogl,%nreg=lnreg
+
+    if %defined(vseries)
+    {
+        set vseries lb le = vmodel
+    }
+
+end procedure
+
+function %daterangelabel s
+
+    type string %daterangelabel
+    type series s
+    local series v
+    set v = %if(%valid(s),t,%na)
+	compute %daterangelabel=%datelabel(fix(%minvalue(v)))+' to '+%datelabel(fix(%maxvalue(v)))
+
+end function
+
+function log10 x
+
+    type real x
+    type real log10
+    compute log10 = log(x)/log(10.)
+
+end function
+
+* sign transfer function
+function %signt a b
+
+   type real %signt a b
+   compute %signt = abs(a)*%sign(b)
+
+end function
+
+function %max2 a b
+
+   type real a b
+   compute %max2 = %if(a.gt.b,a,b)
+
+end function
+
+function %max3 a b c
+
+   type real a b c
+   compute %max3 = %max2(a,%max2(b,c))
+
+end function
+
+* computes the weighted mean
+function %wgtmean x w
+	type real %wgtmean
+	type vector[real] x
+	type vector[real] w
+	compute %wgtmean=%dot(x,w)/%sum(w)
+end function
+
+* computes the weighted median, which is useful for L1 minimization
+function %wgtmedian x w
+    type real %wgtmedian
+    type vector[real] x
+    type vector[real] w
+    local integer pvt
+    local real wtsum1
+    local real wtsum3
+    local series xx
+    local series ww
+    local integer n
+
+    compute n=%rows(x),pvt=1
+    set xx 1 n = %if(%valid(w(t)),x(t),%na)
+    set ww 1 n = %if(%valid(x(t)),w(t),%na)
+    order xx 1 n ww
+    compute wtsum1=0.,%wgtmedian=%na,wtsum3=%sum(ww)
+
+    while wtsum1.le.wtsum3
+    {
+		compute wtsum1=wtsum1+ww(pvt),wtsum3=wtsum3-ww(pvt),%wgtmedian=xx(pvt),pvt=pvt+1
+    }
+end function
+
+* this procedure implements the Whittle test for independence of state sequences
+* my reference for this is: "Statistical Methods in Markov Chains," Billingsley, P., The Rand Corporation: Publication P-2092, September, 1960.
+* the author cites papers by Dawson and Good and by Goodman for rigorous proofs.
+*
+* X is a series of state labels on the domain of positive integers
+* we assume the states are labelled from 1 to S (any data not in this domain are ignored)
+* if S is not specified by the STATES option we assume that it is the maximum value discovered in the sequence X
+* the method involves analysing the matrix of transition counts Fij as a contingency table
+procedure whittletest x b e
+	type series x
+	type integer b e
+	option integer states
+	local integer lb le s n i j k
+	local rectangular f
+	local vector fr fc g
+	local real chisq
+	option switch print 1
+	option string title "Whittle's Test for Independence in State Sequences on Series: "+%l(x)
+	option rectangular *fmatrix
+	option rectangular *pmatrix
+	inquire(series=x) lb>>b le>>e
+
+	if %defined(states)
+	{
+		compute s=states
+	}
+	else
+	{
+		extremum(print=print) x lb le
+		compute s=fix(%maximum)
+	}
+
+	compute f=%zeros(s,s),fr=%zeros(s,1),fc=fr,g=fr,chisq=0.
+
+	do k=lb+1,le
+		if %valid(x(k)).and.%valid(x(k-1)).and.x(k).ge.1.and.x(k).le.s.and.x(k-1).ge.1.and.x(k-1).le.s
+		{
+    			compute i=fix(x(k)),j=fix(x(k-1)),f(i,j)=f(i,j)+1
+       }
+	end do
+
+	do i=1,s
+    		ewise g(j)=f(i,j)
+	    	compute fr(i)=%sum(g)
+    		ewise g(j)=f(j,i)
+    		compute fc(i)=%sum(g)
+	end do
+
+	compute n=fix(%sum(f))
+
+	do i=1,s
+     	do j=1,s
+			compute chisq=chisq+((f(i,j)-fr(i)*fc(j)/n)**2)/(fr(i)*fc(j)/n)
+		end do
+	end do
+
+	cdf(title=title,print=print) chisquare chisq (s-1)**2
+
+	if %defined(fmatrix)
+	{
+		compute fmatrix=f
+	}
+
+	if %defined(pmatrix)
+	{
+		dimension pmatrix(s,s)
+		ewise pmatrix(i,j)=f(i,j)/fr(i)
+	}
+end procedure
+
+* this procedure draws samples from a weighted empirical distribution
+* supply data and weight series x and a container series z for the returned data
+* then parameters specify date range for the probe and storage range for the returned data
+* this does not initialize the returned data series, but will overwrite where it needs to store data
+* procedure is straightforward, construct weighted empirical distribution function, draw uniform(0.,1.)
+* and use bisection search plus linear interpolation to compute the returned value
+procedure drawempirical x w z pb pe db de
+	type series x   ;* the values
+	type series w   ;* the weights
+	type integer pb ;* probe begin index
+	type integer pe ;* probe end index
+	type series *z  ;* random sample returned
+	type integer db ;* draw begin index
+	type integer de ;* draw end index
+	local series lx lw iw c
+	local integer lpe lpe ldb lde i l u m ni
+	inquire(series=x) lpb<<pb lpe<<pe
+	inquire(series=x) ldb<<db lde<<de
+	set lx lpb lpe = x
+	set lw lpb lpe = w
+	order lx lpb lpe lw
+	accumulate lw lpb lpe iw
+	set c lpb lpe = iw/iw(lpe)
+	set z ldb lde = %uniform(0.,1.)
+
+	do i=ldb,lde
+		compute l=lpb,u=lpe,ni=lpe-lpb+1
+
+		while ni.gt.0.and.u-l.gt.1.and.c(l).le.z(i).and.c(u).ge.z(i)
+		{
+			compute m=(l+u)/2
+
+			if c(l).le.z(i).and.c(m).ge.z(i)
+			{
+				compute u=m,ni=ni-1
+			}
+			else
+			{
+				compute l=m,ni=ni-1
+			}
+		}
+
+		if l.eq.u
+		{
+			set z i i = x(l)
+		}
+		else
+		{
+			set z i i = x(l)+(z(i)-c(l))*(x(u)-x(l))/(c(u)-c(l))
+		}
+	end do
+end procedure
+
+* linear interpolation of a series at a set of points
+* if datum is outside given range, returns %na
+procedure interpolate x y v w b e bb ee
+	type series x y v *w
+	type integer b e bb ee
+	local integer lb le lbb lee i n l u m
+	local series lx ly
+	inquire(series=x) lb<<b le<<e
+	inquire(series=v) lbb<<bb lee<<ee
+	set lx lb le = x
+	set ly lb le = y
+	order lx lb le ly
+
+	do i=lbb,lee
+		compute l=lb,u=le,n=u-l+1,m=(l+u)/2
+
+		if %valid(v(i)).and.v(i).ge.lx(l).and.v(i).le.lx(u)
+		{
+			while n.gt.0.and.u-l.gt.1.and.lx(l).le.v(i).and.v(i).le.lx(u)
+			{
+				compute m=(l+u)/2,n=n-1
+
+				if lx(m).ge.v(i)
+				{
+					compute u=m
+				}
+				else
+				{
+					compute l=m
+				}
+			}
+
+			if l.eq.u
+			{
+				set w i i = ly(l)
+			}
+			else
+			{
+				set w i i = (v(i)-lx(l))/(lx(u)-lx(l))*(ly(u)-ly(l))+ly(l)
+			}
+		}
+		else
+		{
+			set w i i = %na
+		}
+	end do
+end
+
+* tell the user we're done and set a useful daily calendar as a default
+display 'Standard Utility Package Initialized at '+%dateandtime()+'.'
+@setcalendar(noprint) 2001 1 1
