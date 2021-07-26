@@ -1553,30 +1553,6 @@ procedure setcalendar y m d
 
 end procedure
 
-* get data from sql query
-procedure getfile path
-    type string path
-    open data &path
-    data(format=prn,organization=columns)
-    close data
-end
-
-procedure initialize y m d s
-    type integer y m d
-    type string s
-    option switch filemode 0
-    @setcalendar y m d
-
-    if filemode.eq.0
-    {
-       @getdata s
-    }
-    else
-    {
-       @getfile s
-    }
-end
-
 * %yesterday function
 function %yesterday
     type integer %yesterday
