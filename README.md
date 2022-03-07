@@ -1,4 +1,4 @@
-# Adventures-in-Financial-Data-Science
+# Adventures in Financial Data Science
 Here I am collecting the scripts I have used to prepare my book "Adventures in Financial Data Science" and to support my other writing, such as that on Medium.
 Those for the book are mostly written for the RATS time-series analysis system, which is commercial software. Those for Medium are mostly Python Notebooks on 
 Google's Colabatory system.
