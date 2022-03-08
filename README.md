@@ -4,3 +4,10 @@ Those for the book are mostly written for the RATS time-series analysis system, 
 Google's Colabatory system.
 
 To learn more, or chat with me about this work, join my slack channel: https://join.slack.com/t/gillerinvestments/shared_invite/zt-12zh8m8na-4eDWT6GP5jAjGsYvVHf1dA
+
+To read my work on Medium go here: https://stattrader.medium.com
+
+You can buy copies of my books via: https://www.gillerinvestments.com/store
+
+Thanks,
+Graham
