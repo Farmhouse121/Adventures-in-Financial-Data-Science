@@ -7,7 +7,7 @@ To learn more, or chat with me about this work, join my slack channel: https://j
 
 To read my work on Medium go here: https://stattrader.medium.com
 
-You can buy copies of my books via: https://www.gillerinvestments.com/store
+You can buy copies of my books via: https://www.gillerinvestments.com/store or from Apple Books https://apple.co/3cQZoKl, Google Books http://bit.ly/39m8MDC and Amazon https://amzn.to/39cuRDa. The webpage for the 2nd. Edition is here https://www.worldscientific.com/worldscibooks/10.1142/12678.
 
 Thanks,
 Graham
