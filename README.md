@@ -9,5 +9,9 @@ To read my work on Medium go here: https://stattrader.medium.com
 
 You can buy copies of my books via: https://www.gillerinvestments.com/store or from Apple Books https://apple.co/3cQZoKl, Google Books http://bit.ly/39m8MDC and Amazon https://amzn.to/39cuRDa. The webpage for the 2nd. Edition is here https://www.worldscientific.com/worldscibooks/10.1142/12678.
 
+Note added April, 2024: at this point I've decided that the repository for the next book, [_Financial Data Science in Python_](https://github.com/Farmhouse121/Financial-Data-Science-in-Python), will act as the primary location for the scripts that reproduce analytics similar to those covered in my original book: _Adventures in Financial Data Science, Chapters 2 & 3_. That will be _plenty_ of enough content for the new book and, since the Python notebooks are largely completely original works, it prevents duplication of effort. The goal of _Financial Data Science in Python_ will be to act as an "over your shoulder" companion for the analytics, with each Notebook discussed in great detail. Since I have other obligations, my writing being a "spare time" activity, this will proceed irregularly, but I hope to write an article for Medium once or twice a month. Each article will accompany an original notebook that is written for [Google's Colab system](https://colab.research.google.com) at the moment.
+
+And to answer an inevitable question: yes, I currently pursue an investment strategy that is based on the type of alphas developed in _Adventures in Financial Data Science_ and using the kind of trading strategy I analyze in _Essays on Trading Strategy_.
+
 Thanks,
 Graham
